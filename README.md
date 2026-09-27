@@ -1,20 +1,20 @@
 # STM32-PWM-ADC-UART-Control
 An STM32-based embedded control system that integrates **PWM generation, ADC measurement, relay control, and UART communication** using the STM32 HAL library.
 
-The project demonstrates how an STM32 microcontroller can receive commands through UART, control PWM output, switch a relay, and acquire analog data using ADC with DMA.
+The project demonstrates how an STM32 microcontroller can receive commands through UART, control PWM output, switch a relay, and acquire analog data using ADC — with **both DMA and Interrupt modes available and switchable at compile time**.
 
 ## Features
 
 * PWM generation using **TIM1 Channel 1**
 * PWM duty-cycle control from **0–100%**
 * Analog voltage measurement using **ADC1**
-* ADC data acquisition using **DMA**
+* **Selectable ADC1 acquisition mode**: DMA or Interrupt, chosen via a single `#define` (`ADC_USE_DMA`) in `main.h`
 * Relay ON/OFF control through **GPIO**
-* UART communication using **USART3**
-* UART communication at **9600 baud**
-* UART receive interrupt using `HAL_UART_Receive_IT()`
-* UART transmit interrupt using `HAL_UART_Transmit_IT()`
-* Command-based control through serial communication
+* UART communication using **USART3** at **9600 baud**
+* **Selectable UART3 transfer mode**: DMA or Interrupt, chosen via a single `#define` (`UART_USE_DMA`) in `main.h`
+  * Interrupt mode: `HAL_UART_Receive_IT()` / `HAL_UART_Transmit_IT()`
+  * DMA mode: `HAL_UARTEx_ReceiveToIdle_DMA()` / `HAL_UART_Transmit_DMA()`
+* Command-based control through serial communication, parsed by a single shared `Process_Command()` function (used by both DMA and Interrupt modes, so the command logic is written only once)
 * STM32 HAL-based firmware architecture
 
 ## System Overview
@@ -47,14 +47,31 @@ The firmware provides three main control functions:
 
 ## Hardware Configuration
 
-| Peripheral | Configuration   | Function             |
-| ---------- | --------------- | -------------------- |
-| USART3     | 9600 baud, 8N1  | Serial communication |
-| TIM1 CH1   | PWM             | PWM output           |
-| ADC1       | Channel 4       | Analog measurement   |
-| DMA1       | ADC DMA         | ADC data transfer    |
-| GPIO PA5   | Output          | Relay control        |
-| GPIO       | TIM1 CH1 output | PWM signal           |
+| Peripheral | Configuration    | Function                              |
+| ---------- | ---------------- | -------------------------------------- |
+| USART3     | 9600 baud, 8N1   | Serial communication                   |
+| TIM1 CH1   | PWM              | PWM output                             |
+| ADC1       | Channel 4        | Analog measurement                     |
+| DMA1       | ADC DMA (Ch.1)   | ADC data transfer (when `ADC_USE_DMA=1`) |
+| DMA1       | USART3 RX (Ch.3) / TX (Ch.2) | UART data transfer (when `UART_USE_DMA=1`) |
+| GPIO PA5   | Output (label `RELAY`) | Relay control                    |
+| GPIO       | TIM1 CH1 output  | PWM signal                             |
+
+> The DMA channels for USART3 are provided in the `.ioc` so that switching `UART_USE_DMA` to `1` works without any further CubeMX reconfiguration.
+
+## Mode Configuration (`main.h`)
+
+Both the UART and ADC transfer methods are controlled from two `#define` switches at the top of `main.h`:
+
+```c
+#define UART_USE_DMA    0   /* 0 = Interrupt (default) | 1 = DMA  */
+#define ADC_USE_DMA     1   /* 0 = Interrupt           | 1 = DMA (default) */
+```
+
+Only **one** mode should be active per peripheral. Setting a flag to `1` or `0` automatically compiles in the corresponding code path (`#if` / `#else`) and compiles out the other one — there is no need to manually comment code in or out.
+
+* `UART_USE_DMA = 1` requires the USART3 DMA requests (RX/TX) to be enabled in the `.ioc`, already included in this project.
+* `ADC_USE_DMA = 1` requires the ADC1 DMA request, already included in this project.
 
 ## UART Commands
 
@@ -103,11 +120,7 @@ Turn the relay OFF:
 relay OFF
 ```
 
-The relay is controlled through:
-
-```text
-PA5
-```
+The relay is controlled through pin `PA5` (defined as `RELAY_Pin` / `RELAY_GPIO_Port` in `main.h`).
 
 ## PWM Configuration
 
@@ -150,23 +163,18 @@ ADC1 uses:
 ADC Channel 4
 ```
 
-The ADC operates in continuous conversion mode and transfers the conversion result using DMA.
+The ADC operates in continuous conversion mode. The conversion result is acquired using **either DMA or Interrupt**, depending on `ADC_USE_DMA`:
 
-The ADC result is stored in:
+* **DMA mode** (`ADC_USE_DMA = 1`): the result is written automatically into `adc_dma_buffer[]` by `HAL_ADC_Start_DMA()`.
+* **Interrupt mode** (`ADC_USE_DMA = 0`): the result is read inside `HAL_ADC_ConvCpltCallback()` via `HAL_ADC_GetValue()`. Because `ContinuousConvMode` is enabled, the next conversion starts automatically without calling `HAL_ADC_Start_IT()` again.
 
-```c
-uint16_t readValue[1];
-```
-
-and copied to:
+Either way, the latest reading is stored in:
 
 ```c
-uint16_t adc;
+static volatile uint16_t adc_value;
 ```
 
-The firmware can then transmit the ADC result through UART.
-
-Example output:
+and can be transmitted through UART, for example:
 
 ```text
 ADC Value: 2048
@@ -184,34 +192,27 @@ Stop Bits : 1
 Mode      : TX/RX
 ```
 
-UART reception uses interrupt mode:
+Depending on `UART_USE_DMA`:
 
-```c
-HAL_UART_Receive_IT(&huart3, &rx_data, 1);
-```
+* **Interrupt mode** (`UART_USE_DMA = 0`, default): characters are received one byte at a time via `HAL_UART_Receive_IT()` and accumulated in a buffer until a newline character (`\n`) is received.
+* **DMA mode** (`UART_USE_DMA = 1`): a full line is received via `HAL_UARTEx_ReceiveToIdle_DMA()`, which completes automatically once the line goes idle — no per-byte interrupt handling needed.
 
-Received characters are accumulated in a buffer until a newline character (`\n`) is received.
-
-The command is then parsed and processed.
+In both modes, the completed line is handed to the same `Process_Command()` function, keeping the command-parsing logic identical regardless of the transfer mode.
 
 ## Relay Control
 
-The relay is connected to:
-
-```text
-PA5
-```
+The relay is connected to `PA5` (labeled `RELAY` in the `.ioc`, exposed in `main.h` as `RELAY_Pin` / `RELAY_GPIO_Port`).
 
 Relay ON:
 
 ```c
-HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+HAL_GPIO_WritePin(RELAY_GPIO_Port, RELAY_Pin, GPIO_PIN_SET);
 ```
 
 Relay OFF:
 
 ```c
-HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+HAL_GPIO_WritePin(RELAY_GPIO_Port, RELAY_Pin, GPIO_PIN_RESET);
 ```
 
 The firmware also sends a status message through UART:
@@ -246,7 +247,7 @@ STM32-PWM-ADC-UART-Control/
 │   ├── CMSIS/
 │   └── STM32F1xx_HAL_Driver/
 │
-├── .ioc
+├── Test_UART.ioc
 └── README.md
 ```
 
