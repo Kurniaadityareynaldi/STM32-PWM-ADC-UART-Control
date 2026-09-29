@@ -272,7 +272,9 @@ The current firmware is intended as a development and demonstration project. Har
 
 **Kurnia Aditya Reynaldi**
 
-Electrical Engineering | Embedded Systems | Control Systems | Electronics R&D
+Electrical Engineer | Embedded Systems | Control Systems | Electronics R&D
+
+Contributions, issues, and pull requests are welcome.
 
 ---
 
