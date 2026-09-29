@@ -227,30 +227,6 @@ or:
 Relay OFF
 ```
 
-## Project Structure
-
-Typical STM32CubeIDE project structure:
-
-```text
-STM32-PWM-ADC-UART-Control/
-│
-├── Core/
-│   ├── Inc/
-│   │   └── main.h
-│   │
-│   └── Src/
-│       ├── main.c
-│       ├── stm32f1xx_it.c
-│       └── system_stm32f1xx.c
-│
-├── Drivers/
-│   ├── CMSIS/
-│   └── STM32F1xx_HAL_Driver/
-│
-├── Test_UART.ioc
-└── README.md
-```
-
 ## Development Environment
 
 * **STM32CubeIDE**
